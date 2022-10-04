@@ -1,0 +1,58 @@
+# This file contains the configuration to pre-compute costly features for every routing attempt before the 
+# pipeline starts, because it will be too time consuming to compute these features on the fly. The table created 
+# here will later be joined with the appropriate cohort table during the feature creation phase at the call-level pipeline.
+
+schema_name: dev_pre_computed_features
+table_name: dev_pre_computed
+index_column: routing_attempts_id
+
+log_folder_path: '/mnt/data/projects/vibrant-routing/dev_model_governance/log/'
+
+query_skeleton: |
+    select 
+        t1.routing_attempts_id, 
+        {query_filling}
+    from processed.routing_attempts t1
+    left join processed.routing_attempts t2 
+        on t1.center_key = t2.center_key
+        and t1.termination_number = t2.termination_number
+        and t2.datetime_to_disposition_est BETWEEN t1.arrived_datetime_est - INTERVAL '1 day' AND t1.arrived_datetime_est
+    group by t1.routing_attempts_id
+
+query_fillings:
+    # Number of answered/flowout/abandoned/etc calls at the center in the past X minutes
+    call_outcomes_at_center_past:
+        query_filling: |
+            coalesce (
+            sum(t2.{parameter_2})
+                FILTER (WHERE t2.datetime_to_disposition_est BETWEEN t1.arrived_datetime_est - INTERVAL '{parameter_1} minute' AND t1.arrived_datetime_est) 
+            ,0)
+            as number_calls_{parameter_2}_{parameter_1}_mins_before
+        parameter_1: [5,10]
+        parameter_2: [answered_at_center, flowout_from_center, abandoned_at_center]
+    fraction_call_outcomes_at_center_past:
+        query_filling: |
+            coalesce(
+                    (coalesce (sum(t2.{parameter_2})
+                    FILTER (WHERE t2.datetime_to_disposition_est BETWEEN t1.arrived_datetime_est - INTERVAL '{parameter_1} minute' AND t1.arrived_datetime_est) 
+                    ,0)::float 
+                    / 
+                    nullif (count(t2.call_key)
+                    FILTER (WHERE t2.arrived_datetime_est BETWEEN t1.arrived_datetime_est - INTERVAL '{parameter_1} minute' AND t1.arrived_datetime_est)
+                    ,0)::float)
+            ,0)
+            as fraction_calls_{parameter_2}_{parameter_1}_mins_before
+        parameter_1: [5,10]
+        parameter_2: [answered_at_center, flowout_from_center, abandoned_at_center]
+    # Talk metrics at center (time_to_answer, time_to_abandon, ring_time)
+    talk_metrics_at_center_past:
+        query_filling: |
+            coalesce (
+                {parameter_3}(t2.{parameter_2})
+                    FILTER (WHERE t2.datetime_to_disposition_est BETWEEN t1.arrived_datetime_est - INTERVAL '{parameter_1} minute' AND t1.arrived_datetime_est) 
+            ,0)
+            as {parameter_3}_{parameter_2}_{parameter_1}_mins_before
+        parameter_1: [5,10]
+        parameter_2: [time_to_answer_center, ring_time_center, time_to_abandon_center]
+        parameter_3: [min, max, avg, stddev, variance]
+        

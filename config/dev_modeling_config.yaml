@@ -1,0 +1,780 @@
+##################################################################################
+#### Development environment #####################################################
+## Yaml file that contains all the configurations necessary to run the project. ##
+## Disclaimer: be sure to replace `/mnt/data/projects/vibrant-routing/` throughout the file with the desired parent path.##
+##################################################################################
+
+# DATABASE CONFIG
+database_config:
+    # Name of the database.
+    db_name: vibrant-routing
+    # Schema with the data that will be used as the knowledge source for the call-level.
+    source_data_schema_name: processed
+    # Table with the data that will be used as the main knowledge source for the call-level.
+    source_data_table_name: routing_attempts
+    # Schema that contains the tables needed to run the call-level pipeline.
+    modeling_schema_name: dev_modeling
+    # Table that contains the cohort in the modeling schema.
+    cohort_table_name: cohort
+    # Table that contains the labels in the modeling schema.
+    label_table_name: labels
+    # Table that contains the features in the modeling schema.
+    feature_schema_name: dev_features
+
+# TODO
+# experiment_schema_name: dev_experiments.
+
+# PROJECT PATHS
+# Path to the folder where to store the models of interest.
+model_folder_path: '/mnt/data/projects/vibrant-routing/dev_model_governance/models/'
+# Path to the folder where to store the logs.
+log_folder_path: '/mnt/data/projects/vibrant-routing/dev_model_governance/log/'
+# Path to the folder where to store the matrices of interest.
+matrix_folder_path: '/mnt/data/projects/vibrant-routing/dev_model_governance/matrices/'
+# Path to the folder where to store the plots of interest.
+plots_folder_path: '/mnt/data/projects/vibrant-routing/dev_model_governance/plots/'
+
+# TRAINED MODELS WILL BE SAVED, IF TRUE
+save_trained_models : false
+
+# TIME SPLITTING
+# How to divide the window into train/validation splits.
+temporal_config:
+    # Earliest datetime to start the cohort
+    feature_start_time: '2022-05-01 00:00:00'
+    # Latest datetime to end the cohort
+    feature_end_time: '2022-06-03 23:59:59'
+    # Time format of the start/end datetimes indicated in the temporal_config.
+    time_format: '%Y-%m-%d %H:%M:%S'
+    # Length of time included in a train matrix [days].
+    max_training_histories_days: '10'
+    # Length of time included in a validation matrix [days].
+    validation_duration_days: '5'
+    # How frequently to retrain models [days].
+    update_frequency_days: '15'
+
+
+# COHORT CONFIG
+# Cohorts are configured by passing a query with placeholders for the 'source_data_schema_name', 
+# 'source_data_table_name', 'start_datetime_est', 'end_datetime_est'.
+# The 'query' key should have a query, parameterized with the aforesaid parameters, 
+# to select the routing attempts that should be included for a given time interval.
+cohort_config:
+    # Query with the content of the cohort table.
+    query: |
+        with cohort as (
+            select routing_attempts_id, initiated_datetime_est
+            from {source_data_schema_name}.{source_data_table_name}
+            where initiated_datetime_est between '{start_datetime_est}' and '{end_datetime_est}'
+        )
+        select
+            routing_attempts_id::bigint,
+            initiated_datetime_est::timestamp
+        from cohort
+    # Indeces to add to the cohort table.
+    indexes: 
+        - 'routing_attempts_id'
+
+
+# LABEL GENERATION
+# Labels are configured by passing a query with placeholders.
+label_config:
+    # Query with the content of the label table.
+    query: |
+            select
+                t1.routing_attempts_id,
+                t2.answered_at_center
+            from {modeling_schema_name}.{cohort_table_name} t1
+            left join {source_data_schema_name}.{source_data_table_name} t2
+            using(routing_attempts_id)
+
+
+# FEATURE GENERATION
+# Features are configured by passing a query with placeholders. 
+# It can support up to 3 parameters per feature group.
+feature_config:
+    # Set the skeleton of the query to ultimately create the feature table for the call-level pipeline.
+    # The {query_filling} parameter will be replaced by the {query_fillings} that are defined 
+    # inside the feature_config. It contains all the features that we want to create.
+    query_skeleton: |
+        select
+            routing_attempts_id,
+            {query_filling}
+        from {modeling_schema_name}.{cohort_table_name}
+        left join {source_data_schema_name}.{source_data_table_name} using (routing_attempts_id)
+    # Set the skeleton of the query to ultimately create the feature table for the routing-level pipeline.
+    # The {query_filling} parameter will be replaced by the {query_fillings} that are defined 
+    # inside the feature_config. It contains all the features that we want to create.
+    query_skeleton_routing_level: |
+        with dynamic_table as (
+            select
+                call_key,
+                center_key,
+                termination_number,
+                arrived_datetime_est,
+                {query_filling}
+            from 
+                (select *
+                from {source_data_schema_name}.{source_data_table_name} 
+                union all
+                select *
+                from {source_data_schema_name}.{simulated_routing_attempts_table_name} 
+                ) as stacked_table
+            )
+        select * 
+        from dynamic_table
+        where 
+            call_key='{call_key}' and 
+            center_key='{center_key}' and
+            termination_number={termination_number} and 
+            arrived_datetime_est='{arrived_datetime_est}'
+    # Set the skeleton of the query to ultimately create the pre-computed feature table for the call-level pipeline.
+    # Pre-computed features need to be computed to avoid leakage in the creation of features.
+    pre_computed_features_skeleton: |
+        select 
+            *
+        from {modeling_schema_name}.{cohort_table_name}
+        left join {pre_computed_features_schema_name}.{pre_computed_features_table_name} using (routing_attempts_id)
+    # Set the query fillings to calculate all the desired features. The features are grouped based on their topic.
+    # For each group of features, the SQL query that creates each of the features of interest is defined as well as
+    # the list of parameters to use in the query if necessary.
+    query_fillings:
+        # Number of calls routed into the center X minutes before.
+        number_calls_at_center_past:
+            query_filling: |
+                count(call_key) over(
+                    partition by center_key, termination_number
+                    order by arrived_datetime_est asc
+                    range between '{parameter_1} minute' preceding and current row
+                    exclude current row
+                )
+                as number_calls_at_center_{parameter_1}_mins_before
+            parameter_1: [5,10]
+        # Properties of the subnetwork
+        subnetwork_properties:
+            query_filling: |
+                network_is_{parameter_1}
+            parameter_1: [ll, ll_spanish, ll_backup]
+        # Group of features related to the datetime when the calls arrived.
+        # The attribute "initiated_datetime_est" does not work.
+        datetime:
+            query_filling: |
+                coalesce(extract({parameter_2} from {parameter_1}),-1) as {parameter_1}_{parameter_2}_numeric
+            parameter_1: [arrived_datetime_est]
+            parameter_2: [hour, dow, day, week]
+        # Group of features that do not pertain to any obvious topic group.
+        alphabet_soup:
+            query_filling: |
+                coalesce({parameter_1},-1) as {parameter_1}
+            parameter_1: [attempt_number, caller_is_cell_phone]
+        # Group of features related to the time of the day when calls arrived.
+        datetime_imputed:
+            query_filling: |
+                case {parameter_2} when '{parameter_1}' then 1 else 0 end as {parameter_2}_in_{parameter_1}
+            parameter_1: [morning, afternoon, evening]
+            parameter_2: [arrived_part_of_day, initiated_part_of_day]
+        # Group of features related to state data.
+        state_located:
+            query_filling: |
+                case {parameter_2} when '{parameter_1}' then 1 else 0 end as {parameter_2}_in_{parameter_1}
+            parameter_1: [AK, AL, AR]
+            parameter_2: [center_state_abbrev, caller_state_abbrev]
+        # Group of features related to the time zone of the center/caller.
+        time_zone_located:
+            query_filling: |
+                case {parameter_2} when '{parameter_1}' then 1 else 0 end as "{parameter_2}_in_{parameter_1}"
+            parameter_1: [America/Nome, Pacific/Guam, America/Phoenix]
+            parameter_2: [center_time_zone, caller_time_zone]
+        # Group of features that characterizes to which center each call was routed to.
+        # This query creates a dummy variable that equals 1 for the corresponding call center.
+        center_key:
+            query_filling: |
+                case {parameter_2} when '{parameter_1}' then 1 else 0 end as {parameter_2}_in_{parameter_1}
+            parameter_1: [FL239000, NJ973000, HI000808]
+            parameter_2: [center_key]
+    # Set the skeleton of the query that adds the pre-computed features to the routing-level.
+    # Note that we need stack simulated and historical together (stacked) using "union all"
+    # because the realized calls of the simulated table become part of "history".
+    query_skeleton_routing_level_augment: |
+        with cohort as (
+            select *
+            from {source_data_schema_name}.{simulated_routing_attempts_table_name} c 
+            where 
+                call_key = '{call_key}' and 
+                center_key = '{center_key}' and 
+                termination_number = {termination_number} and 
+                arrived_datetime_est = '{arrived_datetime_est}'
+        ),
+            stacked as (
+            select *
+            from {source_data_schema_name}.{source_data_table_name} hra 
+            where call_key != '{call_key}'
+            union all 
+            select *
+            from {source_data_schema_name}.{simulated_routing_attempts_table_name} c2 
+        )
+        select 
+            t1.call_key, 
+            t1.center_key,
+            t1.termination_number,
+            t1.arrived_datetime_est,
+            {query_filling}
+        from cohort t1
+        left join stacked t2 
+        on t1.center_key = t2.center_key and
+            t1.termination_number = t2.termination_number and 
+            t2.arrived_datetime_est between t1.arrived_datetime_est - interval '1 day' and t1.arrived_datetime_est 
+        group by t1.call_key, t1.center_key, t1.termination_number, t1.arrived_datetime_est  
+    # Set the query filling to enrich the query skeleton for the pre-computed features to the routing-level.
+    query_fillings_augment:
+        # Group of features that characterize the number of answered, flowout, abandoned, etc. 
+        # calls at the center in the past X minutes.
+        call_outcomes_at_center_past:
+            query_filling: |
+                coalesce (
+                sum(t2.{parameter_2})
+                    FILTER (WHERE t2.datetime_to_disposition_est BETWEEN t1.arrived_datetime_est - INTERVAL '{parameter_1} minute' AND t1.arrived_datetime_est) 
+                ,0)
+                as number_calls_{parameter_2}_{parameter_1}_mins_before
+            parameter_1: [1,3,5,10,15,20,30,60,80,90,100,120]
+            parameter_2: [answered_at_center, flowout_from_center, abandoned_at_center]
+        # Group of features about the characterize the fraction of answered, flowout, abandoned, etc.
+        # calls at the center in the past X minutes.
+        fraction_call_outcomes_at_center_past:
+            query_filling: |
+                coalesce(
+                        (coalesce (sum(t2.{parameter_2})
+                        FILTER (WHERE t2.datetime_to_disposition_est BETWEEN t1.arrived_datetime_est - INTERVAL '{parameter_1} minute' AND t1.arrived_datetime_est) 
+                        ,0)::float 
+                        / 
+                        nullif (count(t2.call_key)
+                        FILTER (WHERE t2.arrived_datetime_est BETWEEN t1.arrived_datetime_est - INTERVAL '{parameter_1} minute' AND t1.arrived_datetime_est)
+                        ,0)::float)
+                ,0)
+                as fraction_calls_{parameter_2}_{parameter_1}_mins_before
+            parameter_1: [1,3,5,10,15,20,30,60,80,90,100,120]
+            parameter_2: [answered_at_center, flowout_from_center, abandoned_at_center]
+        # Group of features that depict talk metrics at center (time_to_answer, time_to_abandon, ring_time).
+        talk_metrics_at_center_past:
+            query_filling: |
+                coalesce (
+                    {parameter_3}(t2.{parameter_2})
+                        FILTER (WHERE t2.datetime_to_disposition_est BETWEEN t1.arrived_datetime_est - INTERVAL '{parameter_1} minute' AND t1.arrived_datetime_est) 
+                ,0)
+                as {parameter_3}_{parameter_2}_{parameter_1}_mins_before
+            parameter_1: [1,3,5,10,15,20,30,60,80,90,100,120]
+            parameter_2: [time_to_answer_center, ring_time_center, time_to_abandon_center]
+            parameter_3: [min, max, avg, stddev, variance]
+        
+
+# MATRIX GENERATION
+# The matrix creation is configured by passing a query with placeholders.
+matrix_creator_config:
+    # Name of label column in the dataset matrix.
+    label_column_name: answered_at_center
+    # Columns to remove from matrix during training and prediction.
+    columns_to_remove:
+        - routing_attempts_id
+        - initiated_datetime_est
+    # Skeleton of the query that characterizes the matrix generator.
+    query_skeleton: |
+        select
+            *
+        from {schema_name}.{cohort_table_name} t1
+        {query_filling}
+        left join dev_features.pre_computed using (routing_attempts_id)
+        left join {schema_name}.{label_table_name} t3 using (routing_attempts_id)
+        where t1.initiated_datetime_est between '{split_start_datetime}' and '{split_end_datetime}'
+    query_filling: |
+        left join dev_features.{feature_table_name} using (routing_attempts_id)
+
+
+# MODEL scoring
+# How each trained model should be evaluated.
+# Threshold-based metrics should be introduced as a singe list item, such as ["precision@k"].
+scoring:
+-
+    metrics: [auc-roc]
+-
+    metrics: [precision@, recall@, fpr@]
+    thresholds:
+        pct: [0.4]
+        abs: [0.5]
+
+
+# MODELS TO TRAIN
+# Model declarations and their hyperparameters.
+# Use the `train_flag` parameter to skip the model during training.
+model_grid:
+    src.pipeline.call.model.estimator.ScaledLogisticRegression:  
+        train_flag: True
+        penalty: [l2]
+        C: [0.000001]
+        solver: [lbfgs]
+        n_jobs: [-1]
+    sklearn.tree.DecisionTreeClassifier:
+        train_flag: True
+        criterion: [gini]
+        max_depth: [null]
+        min_samples_split: [2]
+        min_samples_leaf: [1]
+    sklearn.ensemble.AdaBoostClassifier:
+        # Note that the base estimator defaults to Decision Tree.
+        train_flag: True
+        n_estimators: [10]
+        learning_rate: [0.1]
+    src.pipeline.call.model.baseline.AnswerRateAtCenter:
+        train_flag: True
+        imputation_strategy: [min, max]
+        init_param: 
+            db_conn: null
+            table_name: baseline_answer_rate
+            label_column_name: answer_rate_at_center
+            # The answer rate of each center is computed for the given time split.
+            train_query: |
+                with answer_rate_baseline as (
+                    select 
+                        routing_attempts_id, 
+                        center_key,
+                        termination_number, 
+                        initiated_datetime_est,
+                        answer_rate_at_center
+                    from {source_data_schema_name}.{source_data_table_name}  
+                        left join(
+                            select 
+                                center_key, 
+                                termination_number, 
+                                sum(answered_at_center)::float /count(*) as answer_rate_at_center
+                            from {source_data_schema_name}.{source_data_table_name}  
+                            group by center_key, termination_number
+                    ) as center_matrix 
+                    using (center_key, termination_number)
+                    where initiated_datetime_est between '{split_start_datetime}' and '{split_end_datetime}'
+                )
+                select 
+                    center_key,
+                    termination_number,
+                    answer_rate_at_center
+                from answer_rate_baseline
+                group by center_key, termination_number, answer_rate_at_center
+            validation_query: |
+                with validation_lookup as (
+                    select
+                        center_key,
+                        termination_number 
+                    from {source_data_schema_name}.{source_data_table_name}
+                    where initiated_datetime_est between '{split_start_datetime}' and  '{split_end_datetime}'
+                )
+                select 
+                    t2.answer_rate_at_center  
+                from validation_lookup t1
+                left join {modeling_schema_name}.{table_name} t2 
+                using(center_key, termination_number)
+    # The FeatureRanker model ranks features based on their correlation to the label.
+    src.pipeline.call.model.baseline.FeatureRanker:
+        train_flag: True
+        # These are best performing features according to feature_importance.
+        name_of_feature_to_rank: [number_calls_at_center_10_mins_before, attempt_number]
+        # The following parameter indicates whether or not to rank 
+        # the low values as higher and vice-versa.
+        low_value_is_ranked_higher: [True, False] 
+    sklearn.ensemble.RandomForestClassifier:
+        train_flag: True
+        n_estimators: [2]
+        criterion: [gini]
+        max_features: [sqrt]
+        max_depth: [100]
+        min_samples_split: [10]
+        n_jobs: [-1]
+    sklearn.ensemble.ExtraTreesClassifier:
+        train_flag: True
+        n_estimators: [10]
+        criterion: [gini]
+        max_features: [sqrt]
+        max_depth: [null]
+        min_samples_split: [2]
+        n_jobs: [-1]
+        
+# ROUTING LEVEL CONFIG
+routing_level_config:   
+    # SIMULATION DATETIME TEMPORAL CONFIG
+    temporal_config:
+            # Earliest date to include in the historical data 
+            # for calculating the feature of simulated data. If null, 
+            # then include all the data before simulation_start_datetime.
+            historical_start_datetime: '2022-01-01 00:00:00'
+            # Date to start the simulation of calls.
+            simulation_start_datetime: '2022-05-26 00:00:00'
+            # Length of simulation period. If null, 
+            # then simulates till the end of the data.
+            # The following are valid slots:
+            # `x micro[seconds]`, `x sec[onds]`, 
+            # `x min[utes]`, `x h[ours]`, `x day[s]`
+            # It defaults to days.
+            simulation_duration: "10 min"
+            # Time format.
+            time_format: '%Y-%m-%d %H:%M:%S'
+    # DATABASE CONFIG
+    database_config:
+        schema_name: dev_routing_level
+        cohort_table_name: cohort
+    # BEST MODEL CONFIG
+    best_model_config:
+        model_pickle_path: '/mnt/data/projects/vibrant-routing/dev_model_governance/models/1163a4f816099e875654aa0102c3670d.pickle'
+    # COHORT CONFIG
+    cohort_config:
+        # Query that describes the cohort for the routing-level.
+        cohort_query:
+            with t (call_key, center_key, termination_number, arrived_datetime_est) as (
+                values ('{call_key}'::text, '{center_key}'::text, {termination_number}::bigint, '{arrived_datetime_est}'::timestamp)
+            )
+            select * from t
+    # FEATURE GENERATION
+    # The configuration of features contains the schemas and tables in the database
+    # where the information is stored.
+    feature_config:
+        # Schema with the data that will be used as the knowledge source for the routing-level.
+        source_data_schema_name: dev_routing_level
+        # Table with the data that will be used as the main knowledge source for the routing-level.
+        source_data_table_name: historical_routing_attempts
+        # Table with the data that will be used to store the features created for the routing-level.
+        feature_schema_name: dev_routing_level_features
+        # Table with the data that will be used to complement the main knowledge source
+        # for the routing-level with simulated data.
+        simulated_routing_attempts_table_name: simulated_routing_attempts
+    # LIST OF TABLES TO CREATE
+    # Tables are created only if `table_flag` is set to True.
+    tables_to_create:
+        -   
+            # Table that contains the historical information about the routing attempts of interest.
+            # It will be created based on the value of the boolean table_flag.
+            table_flag: True
+            # Name of the table in the database.
+            name: historical_routing_attempts
+            # Query to create this table in the database.
+            query: |
+                select 
+                    call_key::text,
+                    caller_npanxx::double precision,
+                    caller_state_abbrev::text,
+                    center_key::text,
+                    termination_number::bigint,
+                    center_state_abbrev::text,
+                    initiated_datetime_est::timestamp,
+                    arrived_datetime_est::timestamp,
+                    arrived_datetime_local::timestamp,
+                    attempt_number::bigint,
+                    max_attempt_num::bigint,
+                    completed_at_center::int,
+                    answered_at_center::int,
+                    abandoned_at_center::int,
+                    flowout_from_center::int,
+                    answered_in_state::int,
+                    answered_out_state::int,
+                    time_to_abandon_center::double precision,
+                    time_to_leave_center::double precision,
+                    talk_time_center::double precision,
+                    ring_time_center::double precision,
+                    time_to_answer_center::double precision,
+                    network_is_ll::int,
+                    network_is_ll_spanish::int,
+                    network_is_ll_backup::int,
+                    network_is_va::int,
+                    network_is_ddh::int,
+                    network_is_ddh_spanish::int,
+                    arrived_part_of_day::text,
+                    initiated_part_of_day::text,
+                    datetime_to_disposition_est::timestamp,
+                    datetime_to_leave_center_est::timestamp,
+                    center_time_zone::text,
+                    caller_time_zone::text,
+                    caller_is_cell_phone::int,
+                    center_uses_dst::int,
+                    num_NSPL_centers_in_center_state::int
+                from {source_data_schema_name}.{source_data_table_name}
+                where initiated_datetime_est between '{start_datetime_est}' and '{end_datetime_est}'
+            # Indexes to create in this table.
+            indexes:
+                - call_key
+            # Tag that characterizes which would be the schemas of interest.
+            # The current possible options are historical, simulated, and future.
+            # Look for the routing-level cohort creator for more information.
+            tag: historical
+        -
+            # Table that contains the simulated data about the routing attempts of interest.
+            # It will be created based on the value of the boolean table_flag.
+            table_flag: True
+            # Name of the table in the database.
+            name: simulated_routing_attempts
+            # Query to create this table in the database.
+            query: |
+                select 
+                    call_key::text,
+                    caller_npanxx::double precision,
+                    caller_state_abbrev::text,
+                    center_key::text,
+                    termination_number::bigint,
+                    center_state_abbrev::text,
+                    initiated_datetime_est::timestamp,
+                    arrived_datetime_est::timestamp,
+                    arrived_datetime_local::timestamp,
+                    attempt_number::bigint,
+                    max_attempt_num::bigint,
+                    completed_at_center::int,
+                    answered_at_center::int,
+                    abandoned_at_center::int,
+                    flowout_from_center::int,
+                    answered_in_state::int,
+                    answered_out_state::int,
+                    time_to_abandon_center::double precision,
+                    time_to_leave_center::double precision,
+                    talk_time_center::double precision,
+                    ring_time_center::double precision,
+                    time_to_answer_center::double precision,
+                    network_is_ll::int,
+                    network_is_ll_spanish::int,
+                    network_is_ll_backup::int,
+                    network_is_va::int,
+                    network_is_ddh::int,
+                    network_is_ddh_spanish::int,
+                    arrived_part_of_day::text,
+                    initiated_part_of_day::text,
+                    datetime_to_disposition_est::timestamp,
+                    datetime_to_leave_center_est::timestamp,
+                    center_time_zone::text,
+                    caller_time_zone::text,
+                    caller_is_cell_phone::int,
+                    center_uses_dst::int,
+                    num_NSPL_centers_in_center_state::int
+                from {source_data_schema_name}.{source_data_table_name}
+                limit 0
+            # Indexes to create in this table.
+            indexes:
+                - call_key
+            # Tag that characterizes which would be the schemas of interest.
+            # The current possible options are historical, simulated, and future.
+            # Look for the routing-level cohort creator for more information.
+            tag: simulated
+        - 
+            # Table that contains all the active calls whose behaviour will be simulated by the routing simulator.
+            # It will be created based on the value of the boolean table_flag.
+            table_flag: True
+            # Name of the table in the database.
+            name: active_calls_in_queue
+            # Query to create this table in the database.
+            query: |
+                select 
+                    distinct call_key::text,
+                    caller_npanxx::double precision,
+                    initiated_datetime_est::timestamp,
+                    caller_is_cell_phone::int,
+                    (coalesce(caller_state_abbrev::text, 'NA')) as caller_state_abbrev,
+                    (coalesce(caller_time_zone::text, 'NA')) as caller_time_zone
+                from {source_data_schema_name}.{source_data_table_name}
+                where initiated_datetime_est between '{start_datetime_est}' and '{end_datetime_est}' and caller_npanxx is not null
+            # Indexes to create in this table
+            indexes:
+                - call_key
+            # Tag that characterizes which would be the schemas of interest.
+            # The current possible options are historical, simulated, and future.
+            # Look for the routing-level cohort creator for more information.
+            tag: future
+        -
+            # Table that contains the center waiting times based on whether they are ACD or not.
+            # Call centers with ACD receive a waiting time of 3 minutes while non-ACD centers receive a waiting
+            # time of 1 minute. This table will be created based on the value of the boolean table_flag.
+            table_flag: True
+            # Name of the table in the database.
+            name: center_waiting_times
+            # Query to create this table in the database.
+            query: |
+                with records as (
+                    select
+                        center_key,
+                        termination_number,
+                        center_is_acd,
+                        row_number() over (partition by center_key, termination_number order by arrived_datetime_est desc) as rn
+                    from {source_data_schema_name}.{source_data_table_name}
+                )
+                select
+                    center_key,
+                    termination_number,
+                    center_is_acd,
+                    case
+                        when center_is_acd = 1 then 3
+                        else 1
+                    end as wait_time
+                from records
+                where rn = 1
+            # Indexes to create in this table.
+            indexes:
+                - center_key
+                - termination_number
+            # Tag that characterizes which would be the schemas of interest.
+            # The current possible options are historical, simulated, and future.
+            # Look for the routing-level cohort creator for more information.
+            tag: simulated
+        -
+            # Table that contains data about the abandonment probability based on time buckets.
+            # This table will be created based on the value of the boolean table_flag.
+            table_flag: True
+            # Name of the table in the database.
+            name: abandon_prob_by_bucket
+            # Query to create this table in the database.
+            query: | 
+                    with gen as (
+                        select generate_series(0, 60*17, 60) as bucket_start_sec
+                    )
+                    , buckets as (
+                        select 
+                            bucket_start_sec, 
+                            bucket_start_sec + 59 as bucket_end_sec
+                        from gen
+                    )
+                    , total_wait_time as (
+                        select 
+                            call_key,
+                            sum(ring_time_center) as total_ring_time,
+                            max(abandoned_at_center) as abandoned
+                        from {source_data_schema_name}.{source_data_table_name}
+                        where 
+                            (network_is_ll + network_is_ll_backup) > 0
+                            and initiated_datetime_est::DATE >= '2020-01-01'::DATE
+                            and initiated_datetime_est between '{start_datetime_est}' and '{end_datetime_est}'
+                        group by 1
+                    )
+                    , table_join as (
+                        select *
+                        from buckets cross join total_wait_time
+                    )
+                    , proba_buckets as (
+                        select 
+                            bucket_start_sec,
+                            bucket_end_sec,
+                            count(*) as num_calls,
+                            sum(abandoned) as num_abandoned_calls,
+                            (1.000 * sum(abandoned)) / count(*) as prob_abandon
+                        from table_join
+                        where 
+                            (abandoned = 1 and total_ring_time between bucket_start_sec and bucket_end_sec)
+                            or (abandoned = 0 and total_ring_time > bucket_end_sec)
+                        group by bucket_start_sec, bucket_end_sec
+                    )
+                    , maximum_bucket as (
+                        select 
+                            (60*18) as bucket_start_sec, 
+                            -1 as bucket_end_sec, 
+                            count(*) as num_calls, 
+                            sum(abandoned) as num_abandoned_calls, 
+                            1.000*sum(abandoned)/count(*) as prob_abandon
+                        from total_wait_time
+                        where (abandoned = 1 and total_ring_time > (60*18))
+                                or (abandoned = 0 and total_ring_time > (60*18))
+                        group by 1,2
+                    )
+                    select *
+                    from proba_buckets
+                    full outer join maximum_bucket 
+                        using(bucket_start_sec, bucket_end_sec, num_calls, num_abandoned_calls, prob_abandon)
+                    order by bucket_start_sec
+            # Indexes to create in this table
+            indexes:
+                - bucket_start_sec
+                - bucket_end_sec
+            # Tag that characterizes which would be the schemas of interest.
+            # The current possible options are historical, simulated, and future.
+            # Look for the routing-level cohort creator for more information.
+            tag: historical
+
+        -
+            # Table that contains the center historical disposition statistics.
+            # It will be created based on the value of the boolean table_flag.
+            table_flag: True
+            # Name of the table in the database.
+            name: center_historical_disposition_stat
+            # Query to create this table in the database.
+            query: |
+                with avg_answered_center_metrics as (
+                    select 
+                            center_key ,
+                            termination_number ,
+                            avg(ring_time_center) as answered_avg_ring_time,
+                            avg(time_to_answer_center) as answered_avg_time_to_answer,
+                            avg(time_to_leave_center) as answered_avg_time_to_leave,
+                            avg(talk_time_center) as answered_avg_talk_time
+                        from {source_data_schema_name}.{source_data_table_name}
+                        where time_to_answer_center  > 0 
+                            and answered_at_center = 1
+                            and initiated_datetime_est::DATE >= '2020-01-01'::DATE
+                            and initiated_datetime_est between '{start_datetime_est}' and '{end_datetime_est}'
+                        group by 1,2
+                    ),
+                    avg_abandoned_center_metrics as (
+                    select 
+                            center_key ,
+                            termination_number ,
+                            avg(ring_time_center) as abandon_avg_ring_time_center,
+                            avg(time_to_leave_center) as abandon_avg_time_to_leave
+                        from {source_data_schema_name}.{source_data_table_name}
+                        where abandoned_at_center  = 1
+                            and initiated_datetime_est::DATE >= '2020-01-01'::DATE
+                            and initiated_datetime_est between '{start_datetime_est}' and '{end_datetime_est}'
+                        group by 1,2
+                    ),
+                    avg_flowout_center_metrics as (
+                    select 
+                            center_key ,
+                            termination_number ,
+                            avg(ring_time_center) as flowout_avg_ring_time_center,
+                            avg(time_to_leave_center) as flowout_avg_time_to_leave
+                        from {source_data_schema_name}.{source_data_table_name}
+                        where flowout_from_center  = 1
+                            and initiated_datetime_est::DATE >= '2020-01-01'::DATE
+                            and initiated_datetime_est between '{start_datetime_est}' and '{end_datetime_est}'
+                        group by 1,2
+                    )
+                    select 
+                        center_key ,
+                        termination_number ,
+                        coalesce(answered_avg_ring_time, 0.0) as answered_avg_ring_time,
+                        coalesce(answered_avg_time_to_answer, 0.0) as answered_avg_time_to_answer,
+                        coalesce(answered_avg_time_to_leave, 0.0) as answered_avg_time_to_leave,
+                        coalesce(answered_avg_talk_time, 0.0) as answered_avg_talk_time,
+                        coalesce(abandon_avg_ring_time_center, 0.0) as abandon_avg_ring_time_center,
+                        coalesce(abandon_avg_time_to_leave, 0.0) as abandon_avg_time_to_leave, 
+                        coalesce(flowout_avg_ring_time_center, 0.0) as flowout_avg_ring_time_center,
+                        coalesce(flowout_avg_time_to_leave, 0.0) as flowout_avg_time_to_leave
+                    from avg_answered_center_metrics
+                    left join avg_abandoned_center_metrics using(center_key, termination_number)
+                    left join avg_flowout_center_metrics using(center_key, termination_number)
+            # Indexes to create in this table
+            indexes: 
+                - center_key
+                - termination_number
+            # Tag that characterizes which would be the schemas of interest.
+            # The current possible options are historical, simulated, and future.
+            # Look for the routing-level cohort creator for more information.
+            tag: historical  
+ 
+    # MATRIX CREATOR CONFIG
+    matrix_creator_config:
+        # List of columns to be removed when creating the matrix.
+        columns_to_remove:
+            - initiated_datetime_est
+        # Matrix is configured by passing a query with placeholders.
+        query_skeleton: |
+            select *
+            from {schema_name}.{cohort_table_name} t1
+            {query_filling}
+        # Filling to enrich the matric creator query for the routing-level.
+        query_filling: |
+            left join dev_routing_level_features.{feature_table_name} using (call_key, center_key, termination_number, arrived_datetime_est)
+    
+    # SIMULATOR CONFIG
+    simulator_config:
+        # Path to the file that corresponds to the routing table of reference.
+        original_table_filepath: /mnt/data/projects/vibrant-routing/data/20220604/vibrant_RoutingTable_202206031725.csv
+        # Path to the folder where to store all the generated routing tables.
+        save_filepath: /mnt/data/projects/vibrant-routing/data/dev_generated_routing_tables/
+        # Number of exchange codes that are included in the routing table of reference.
+        row_count_original_table: 202765

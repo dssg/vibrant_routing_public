@@ -1,0 +1,195 @@
+# Yaml file for creating a table under a schema in a database
+# Make sure that there is a one-to-one mapping between the file_path and table_name 
+
+db_name: vibrant-routing
+schema_name: raw
+role_name: vibrant-routing-role
+tables_to_load:
+  -
+    file_path: /mnt/data/projects/vibrant-routing/data/20220604/vibrant_RoutingTable_202206031725.csv
+    table_name: vibrant_routingtable_202206031725 
+    indexes:
+      - npanxx
+  -
+    file_path: /mnt/data/projects/vibrant-routing/data/20220604/vibrant_centers_calls_202206031630.csv
+    table_name: vibrant_centers_calls_202206031630
+    indexes:
+      - call_key
+      - caller_npanxx
+  -
+    file_path: /mnt/data/projects/vibrant-routing/data/state_data/area_codes_by_citystate.csv
+    table_name: area_codes_by_citystate
+    indexes:
+      -
+  -
+    file_path: /mnt/data/projects/vibrant-routing/data/state_data/state_data.csv
+    table_name: basic_state_data
+    indexes:
+      -
+data_to_download_from_census:
+    tables_to_create:
+      -
+        table_name: census_data_state
+        geography: state
+        indexes:
+          - state
+          - state_id
+      -
+        table_name: census_data_county
+        geography: county
+        indexes:
+          - state_id
+          - state
+          - county_id
+          - county
+      -
+        table_name: census_data_zcta
+        geography: zip code tabulation area
+        indexes:
+          - zcta
+    content:
+      B01001_001E: population_size
+      B19013_001E: median_hh_income
+      B19083_001E: gini_index
+      C02003_003E: race_white
+      C02003_004E: race_black_or_african_american
+      C02003_005E: race_american_indian_and_alaska_native
+      C02003_006E: race_asian
+      C02003_007E: race_native_hawaiian_and_other_pacific_islander
+      B03002_012E: race_hisp_latino
+      C02003_008E: race_some_other
+      B02001_008E: race_two_races_or_more
+      B05002_002E: born_us
+      B05002_013E: born_non_us
+      B01001_002E: total_male
+      B01001_003E: total_male_under_5_years
+      B01001_004E: total_male_5_to_9_years
+      B01001_005E: total_male_10_to_14_years
+      B01001_006E: total_male_15_to_17_years
+      B01001_007E: total_male_18_and_19_years
+      B01001_008E: total_male_20_years
+      B01001_009E: total_male_21_years
+      B01001_010E: total_male_22_to_24_years
+      B01001_011E: total_male_25_to_29_years
+      B01001_012E: total_male_30_to_34_years
+      B01001_013E: total_male_35_to_39_years
+      B01001_014E: total_male_40_to_44_years
+      B01001_015E: total_male_45_to_49_years
+      B01001_016E: total_male_50_to_54_years
+      B01001_017E: total_male_55_to_59_years
+      B01001_018E: total_male_60_and_61_years
+      B01001_019E: total_male_62_to_64_years
+      B01001_020E: total_male_65_and_66_years
+      B01001_021E: total_male_67_to_69_years
+      B01001_022E: total_male_70_to_74_years
+      B01001_023E: total_male_75_to_79_years
+      B01001_024E: total_male_80_to_84_years
+      B01001_025E: total_male_85_years_and_over
+      B01001_026E: total_female
+      B01001_027E: total_female_under_5_years
+      B01001_028E: total_female_5_to_9_years
+      B01001_029E: total_female_10_to_14_years
+      B01001_030E: total_female_15_to_17_years
+      B01001_031E: total_female_18_and_19_years
+      B01001_032E: total_female_20_years
+      B01001_033E: total_female_21_years
+      B01001_034E: total_female_22_to_24_years
+      B01001_035E: total_female_25_to_29_years
+      B01001_036E: total_female_30_to_34_years
+      B01001_037E: total_female_35_to_39_years
+      B01001_038E: total_female_40_to_44_years
+      B01001_039E: total_female_45_to_49_years
+      B01001_040E: total_female_50_to_54_years
+      B01001_041E: total_female_55_to_59_years
+      B01001_042E: total_female_60_and_61_years
+      B01001_043E: total_female_62_to_64_years
+      B01001_044E: total_female_65_and_66_years
+      B01001_045E: total_female_67_to_69_years
+      B01001_046E: total_female_70_to_74_years
+      B01001_047E: total_female_75_to_79_years
+      B01001_048E: total_female_80_to_84_years
+      B01001_049E: total_female_85_years_and_over
+      B18101_002E: male_disability_total_sample
+      B18101_004E: male_under_5_years_with_disability
+      B18101_007E: male_5_to_17_years_with_disability
+      B18101_010E: male_18_to_34_years_with_disability
+      B18101_013E: male_35_to_64_years_with_disability
+      B18101_016E: male_65_to_74_years_with_disability
+      B18101_019E: male_75_years_and_over_with_disability
+      B18101_021E: female_disability_total_sample
+      B18101_023E: female_under_5_years_with_disability
+      B18101_026E: female_5_to_17_years_with_disability
+      B18101_029E: female_18_to_34_years_with_disability
+      B18101_032E: female_35_to_64_years_with_disability
+      B18101_035E: female_65_to_74_years_with_disability
+      B18101_038E: female_75_years_and_over_with_disability
+      B09019_001E: in_household_total_sample
+      B09019_002E: in_household
+      B09019_003E: in_household_family
+      B09019_024E: in_household_non_family
+      # B09019_038EA: in_household_group_quarters
+      C18120_001E: job_total_sample
+      C18120_003E: job_in_the_labor_force_employed
+      C18120_006E: job_in_the_labor_force_unemployed
+      C18120_009E: job_not_in_labor_force
+      B19001_001E: household_income_past_12_months_adjusted_total_sample
+      B19001_002E: household_income_past_12_months_adjusted_less_than_usd_10000
+      B19001_003E: household_income_past_12_months_adjusted_usd_10000_to_14999
+      B19001_004E: household_income_past_12_months_adjusted_usd_15000_to_19999
+      B19001_005E: household_income_past_12_months_adjusted_usd_20000_to_24999
+      B19001_006E: household_income_past_12_months_adjusted_usd_25000_to_29999
+      B19001_007E: household_income_past_12_months_adjusted_usd_30000_to_34999
+      B19001_008E: household_income_past_12_months_adjusted_usd_35000_to_39999
+      B19001_009E: household_income_past_12_months_adjusted_usd_40000_to_44999
+      B19001_010E: household_income_past_12_months_adjusted_usd_45000_to_49999
+      B19001_011E: household_income_past_12_months_adjusted_usd_50000_to_59999
+      B19001_012E: household_income_past_12_months_adjusted_usd_60000_to_74999
+      B19001_013E: household_income_past_12_months_adjusted_usd_75000_to_99999
+      B19001_014E: household_income_past_12_months_adjusted_usd_100000_to_124999
+      B19001_015E: household_income_past_12_months_adjusted_usd_125000_to_149999
+      B19001_016E: household_income_past_12_months_adjusted_usd_150000_to_199999
+      B19001_017E: household_income_past_12_months_adjusted_usd_200000_or_more
+      B27001_001E: health_insurance_total_sample
+      B27001_002E: health_insurance_total_male_sample
+      B27001_004E: health_insurance_male_under_6_years_yes
+      B27001_005E: health_insurance_male_under_6_years_no
+      B27001_007E: health_insurance_male_6_to_17_years_yes
+      B27001_008E: health_insurance_male_6_to_17_years_no
+      B27001_010E: health_insurance_male_18_to_24_years_yes
+      B27001_011E: health_insurance_male_18_to_24_years_no
+      B27001_013E: health_insurance_male_25_to_34_years_yes
+      B27001_014E: health_insurance_male_25_to_34_years_no
+      B27001_016E: health_insurance_male_35_to_44_years_yes
+      B27001_017E: health_insurance_male_35_to_44_years_no
+      B27001_019E: health_insurance_male_45_to_54_years_yes
+      B27001_020E: health_insurance_male_45_to_54_years_no
+      B27001_022E: health_insurance_male_55_to_64_years_yes
+      B27001_023E: health_insurance_male_55_to_64_years_no
+      B27001_025E: health_insurance_male_65_to_74_years_yes
+      B27001_026E: health_insurance_male_65_to_74_years_no
+      B27001_028E: health_insurance_male_75_years_and_over_yes
+      B27001_029E: health_insurance_male_75_years_and_over_no
+      B27001_030E: health_insurance_total_female_sample
+      B27001_032E: health_insurance_female_under_6_years_yes
+      B27001_033E: health_insurance_female_under_6_years_no
+      B27001_035E: health_insurance_female_6_to_17_years_yes
+      B27001_036E: health_insurance_female_6_to_17_years_no
+      B27001_038E: health_insurance_female_18_to_24_years_yes
+      B27001_039E: health_insurance_female_18_to_24_years_no
+      B27001_041E: health_insurance_female_25_to_34_years_yes
+      B27001_042E: health_insurance_female_25_to_34_years_no
+      B27001_044E: health_insurance_female_35_to_44_years_yes
+      B27001_045E: health_insurance_female_35_to_44_years_no
+      B27001_047E: health_insurance_female_45_to_54_years_yes
+      B27001_048E: health_insurance_female_45_to_54_years_no
+      B27001_050E: health_insurance_female_55_to_64_years_yes
+      B27001_051E: health_insurance_female_55_to_64_years_no
+      B27001_053E: health_insurance_female_65_to_74_years_yes
+      B27001_054E: health_insurance_female_65_to_74_years_no
+      B27001_056E: health_insurance_female_75_years_and_over_yes
+      B27001_057E: health_insurance_female_75_years_and_over_no
+      C27016_001E: poverty_status_total_sample
+      C27016_002E: poverty_status_under_1dot38_of_poverty_threshold
+      C27016_012E: poverty_status_1dot38_to_1dot99_of_poverty_threshold
+      C27016_022E: poverty_status_2dot00_to_3dot99_of_poverty_threshold
+      C27016_032E: poverty_status_4dot00_of_poverty_threshold_and_over
